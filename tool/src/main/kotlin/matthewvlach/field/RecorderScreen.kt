@@ -16,8 +16,6 @@ import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.unit.dp
@@ -40,11 +38,7 @@ import com.thelightphone.sdk.ui.gridUnitsAsDp
 import com.thelightphone.toolmanager.ClientLeafNode
 import com.thelightphone.toolmanager.ClientToolManifest
 import com.thelightphone.toolmanager.FileBrowserSpec
-import kotlin.math.PI
-import kotlin.math.cos
 import kotlin.math.log10
-import kotlin.math.sin
-import kotlin.math.sqrt
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
@@ -154,46 +148,34 @@ class RecorderScreen(host: SealedLightActivity) : FieldScreen(host) {
     }
 }
 
-/** Two tape reels. Tape moves from the left reel to the right as the take gets longer. */
+/** One disk, spinning while recording: grooves, a label and a notch so the turn shows. */
 @Composable
 private fun Reels(spinning: Boolean, elapsedMs: Long) {
     val ink = LightThemeTokens.colors.content
+    val bg = LightThemeTokens.colors.background
     var angle by remember { mutableFloatStateOf(0f) }
     LaunchedEffect(spinning) {
         var last = 0L
         while (spinning) {
             withFrameMillis { t ->
-                if (last != 0L) angle = (angle + (t - last) * 0.12f) % 360f
+                // 33 rpm
+                if (last != 0L) angle = (angle + (t - last) * 0.2f) % 360f
                 last = t
             }
         }
     }
-    // Fill shifts over 30 minutes.
-    val wound = (elapsedMs / (30 * 60_000f)).coerceIn(0f, 1f)
-    Canvas(Modifier.fillMaxWidth().height(170.dp).padding(horizontal = 1.5f.gridUnitsAsDp(), vertical = 1f.gridUnitsAsDp())) {
-        val r = minOf(size.height / 2f, size.width / 4.6f)
-        val left = Offset(r, size.height / 2)
-        val right = Offset(size.width - r, size.height / 2)
-        val hub = r * 0.28f
-        val leftTape = hub + (r * 0.92f - hub) * sqrt(1f - wound)
-        val rightTape = hub + (r * 0.92f - hub) * sqrt(wound)
-        // tape path along the bottom
-        drawLine(ink, Offset(left.x, left.y + leftTape), Offset(right.x, right.y + rightTape), strokeWidth = 3f)
-        reel(left, r, hub, leftTape, angle, ink)
-        reel(right, r, hub, rightTape, angle, ink)
-    }
-}
-
-private fun DrawScope.reel(c: Offset, r: Float, hub: Float, tape: Float, angle: Float, ink: Color) {
-    drawCircle(ink, r, c, style = Stroke(3f))
-    drawCircle(ink, tape, c, style = Stroke((tape - hub).coerceAtLeast(2f)))
-    drawCircle(ink, hub * 0.45f, c)
-    rotate(angle, c) {
-        for (k in 0 until 3) {
-            val a = (k * 120f) * PI.toFloat() / 180f
-            val inner = Offset(c.x + cos(a) * hub * 0.5f, c.y + sin(a) * hub * 0.5f)
-            val outer = Offset(c.x + cos(a) * (r * 0.96f), c.y + sin(a) * (r * 0.96f))
-            drawLine(ink, inner, outer, strokeWidth = 5f)
+    Canvas(Modifier.fillMaxWidth().height(180.dp).padding(vertical = 1f.gridUnitsAsDp())) {
+        val c = Offset(size.width / 2, size.height / 2)
+        val r = size.height / 2
+        drawCircle(ink, r, c)
+        for (k in 1..4) drawCircle(bg, r * (0.5f + k * 0.11f), c, style = Stroke(1.5f))
+        drawCircle(bg, r * 0.34f, c)
+        drawCircle(ink, r * 0.06f, c)
+        rotate(angle, c) {
+            // notch on the label
+            drawLine(ink, Offset(c.x, c.y - r * 0.32f), Offset(c.x, c.y - r * 0.14f), strokeWidth = 6f)
+            // a bright mark on the rim
+            drawLine(bg, Offset(c.x, c.y - r), Offset(c.x, c.y - r * 0.86f), strokeWidth = 6f)
         }
     }
 }
