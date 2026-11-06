@@ -60,7 +60,7 @@ class LibraryScreen(host: SealedLightActivity) : FieldScreen(host) {
                             trailing = formatTime(e.r.durationMs),
                         ) { navigateTo({ RecordingScreen(it, e.r.id) }) }
                         is Entry.Txt -> ListRow(e.n.title, "Note · ${formatWhen(e.n.modifiedAt)}") {
-                            navigateTo({ NoteScreen(it, e.n.id) })
+                            editNote(e.n)
                         }
                     }
                 }
@@ -68,47 +68,17 @@ class LibraryScreen(host: SealedLightActivity) : FieldScreen(host) {
         }
     }
 
-    private fun newNote() {
-        navigateTo({ TextEntryScreen(it, "New note", singleLine = false) }) { text ->
-            if (!text.isNullOrBlank()) Store.saveNote(null, text)
-        }
-    }
-}
+    private fun newNote() = editNote(null)
 
-class NoteScreen(host: SealedLightActivity, private val id: String) : FieldScreen(host) {
-    @Composable
-    override fun Content() {
-        val notes by Store.notes.collectAsState()
-        val note = notes.firstOrNull { it.id == id }
-        var confirm by remember { mutableStateOf(false) }
-        Frame(
-            note?.title ?: "Note",
-            onBack = { goBack() },
-            right = note?.let { n ->
-                LightBarButton.LightIcon(LightIcons.PENCIL, onClick = {
-                    navigateTo({ TextEntryScreen(it, "Note", n.text, singleLine = false) }) { text ->
-                        if (text != null) Store.saveNote(n, text)
-                    }
-                })
-            },
-            bottom = note?.let { n ->
-                listOf(LightBarButton.Text(if (confirm) "TAP TO CONFIRM" else "DELETE", onClick = {
-                    if (confirm) {
-                        Store.deleteNote(n)
-                        goBack()
-                    } else confirm = true
-                }))
-            },
-        ) {
-            if (note == null) {
-                Message("This note was deleted.")
-                return@Frame
+    /** Like Light's Notes: opens straight into the editor. SAVE keeps it, X leaves it as it was,
+     *  and saving an empty note deletes it. */
+    private fun editNote(n: Note?) {
+        navigateTo({ TextEntryScreen(it, n?.title ?: "Untitled", n?.text.orEmpty(), singleLine = false) }) { text ->
+            when {
+                text == null -> Unit
+                text.isBlank() -> if (n != null) Store.deleteNote(n)
+                else -> Store.saveNote(n, text)
             }
-            Column(
-                Modifier.weight(1f).fillMaxWidth()
-                    .verticalScroll(androidx.compose.foundation.rememberScrollState())
-                    .padding(horizontal = 1.5f.gridUnitsAsDp(), vertical = 1f.gridUnitsAsDp()),
-            ) { LightText(note.text, LightTextVariant.Paragraph) }
         }
     }
 }
