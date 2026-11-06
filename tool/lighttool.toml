@@ -1,0 +1,9 @@
+[tool]
+id = "com.matthewvlach.field"
+label = "Field"
+versionCode = 1
+versionName = "1.0.0"
+permissions = ["android.permission.RECORD_AUDIO", "android.permission.WAKE_LOCK"]
+capabilities = []
+orientation = "portrait"
+serverPackage = "com.lightos"
