@@ -148,7 +148,7 @@ class RecorderScreen(host: SealedLightActivity) : FieldScreen(host) {
     }
 }
 
-/** One disk, spinning while recording: grooves, a label and a notch so the turn shows. */
+/** One disk, spinning while recording: a groove, a label and a notch so the turn shows. */
 @Composable
 private fun Reels(spinning: Boolean, elapsedMs: Long) {
     val ink = LightThemeTokens.colors.content
@@ -168,7 +168,7 @@ private fun Reels(spinning: Boolean, elapsedMs: Long) {
         val c = Offset(size.width / 2, size.height / 2)
         val r = size.height / 2
         drawCircle(ink, r, c)
-        for (k in 1..4) drawCircle(bg, r * (0.5f + k * 0.11f), c, style = Stroke(1.5f))
+        drawCircle(bg, r * 0.72f, c, style = Stroke(1.5f))
         drawCircle(bg, r * 0.34f, c)
         drawCircle(ink, r * 0.06f, c)
         rotate(angle, c) {

@@ -106,6 +106,39 @@ object Store {
         rescan()
     }
 
+    /**
+     * Cut a recording down to [startMs]..[endMs], in place. Marks inside the kept part move
+     * with it; marks outside are dropped.
+     */
+    suspend fun trim(r: Recording, startMs: Long, endMs: Long) = kotlinx.coroutines.withContext(Dispatchers.IO) {
+        val rate = java.io.RandomAccessFile(r.file, "r").use { f -> f.seek(24); Integer.reverseBytes(f.readInt()) }
+        val totalFrames = (r.file.length() - 44) / 2
+        val from = (startMs * rate / 1000).coerceIn(0, totalFrames)
+        val to = (endMs * rate / 1000).coerceIn(from, totalFrames)
+        val tmp = File(r.file.parentFile, r.file.name + ".trim")
+        java.io.RandomAccessFile(r.file, "r").use { src ->
+            com.thelightphone.sdk.field.WavWriter(tmp, rate).use { out ->
+                src.seek(44 + from * 2)
+                val bytes = ByteArray(64 * 1024)
+                val shorts = ShortArray(bytes.size / 2)
+                var left = (to - from) * 2
+                while (left > 0) {
+                    val n = src.read(bytes, 0, minOf(bytes.size.toLong(), left).toInt())
+                    if (n <= 0) break
+                    java.nio.ByteBuffer.wrap(bytes, 0, n).order(java.nio.ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(shorts, 0, n / 2)
+                    out.write(shorts, n / 2)
+                    left -= n
+                }
+            }
+        }
+        tmp.renameTo(r.file)
+        val kept = r.markersMs.filter { it in startMs..endMs }.map { it - startMs }
+        sidecar(r.file).writeText(
+            JSONObject().put("name", r.name).put("note", r.note).put("markers", JSONArray(kept)).toString(2)
+        )
+        rescan()
+    }
+
     private fun sidecar(wav: File) = File(wav.parentFile, wav.nameWithoutExtension + ".json")
 
     private fun readRecording(wav: File): Recording {

@@ -29,6 +29,7 @@ import com.thelightphone.sdk.ui.LightTextVariant
 import com.thelightphone.sdk.ui.LightThemeTokens
 import com.thelightphone.sdk.ui.LightTouchableProgressBar
 import com.thelightphone.sdk.ui.gridUnitsAsDp
+import kotlinx.coroutines.launch
 
 /** Recordings and notes together, newest first. */
 class LibraryScreen(host: SealedLightActivity) : FieldScreen(host) {
@@ -122,6 +123,10 @@ class RecordingScreen(host: SealedLightActivity, private val id: String) : Field
         val recordings by Store.recordings.collectAsState()
         val r = recordings.firstOrNull { it.id == id }
         var speedIndex by remember { mutableStateOf(0) }
+        var trimStart by remember { mutableStateOf<Long?>(null) }
+        var trimEnd by remember { mutableStateOf<Long?>(null) }
+        var trimming by remember { mutableStateOf(false) }
+        val scope = androidx.compose.runtime.rememberCoroutineScope()
         var confirm by remember { mutableStateOf(false) }
 
         val p = playerState.value
@@ -197,6 +202,34 @@ class RecordingScreen(host: SealedLightActivity, private val id: String) : Field
                 item {
                     ListRow("Mark here", "Add a mark at ${formatTime(position)}", dim = true) {
                         Store.saveMeta(r.file, r.name, r.note, r.markersMs + position)
+                    }
+                }
+                item {
+                    ListRow("Trim start", trimStart?.let { "From ${formatTime(it, tenths = true)} · tap to set again" }
+                        ?: "Tap to start the take at ${formatTime(position)}") { trimStart = position }
+                }
+                item {
+                    ListRow("Trim end", trimEnd?.let { "At ${formatTime(it, tenths = true)} · tap to set again" }
+                        ?: "Tap to end the take at ${formatTime(position)}") { trimEnd = position }
+                }
+                if (trimStart != null || trimEnd != null) item {
+                    val a = trimStart ?: 0L
+                    val b = trimEnd ?: duration
+                    ListRow(
+                        if (trimming) "Trimming…" else "Trim to ${formatTime(a)} – ${formatTime(b)}",
+                        if (b <= a) "The end has to come after the start" else "Cuts the rest. Can't be undone.",
+                        dim = b <= a || trimming,
+                    ) {
+                        if (b > a && !trimming) {
+                            trimming = true
+                            releasePlayer()
+                            scope.launch {
+                                Store.trim(r, a, b)
+                                trimStart = null
+                                trimEnd = null
+                                trimming = false
+                            }
+                        }
                     }
                 }
                 itemsIndexed(r.markersMs) { i, ms ->
