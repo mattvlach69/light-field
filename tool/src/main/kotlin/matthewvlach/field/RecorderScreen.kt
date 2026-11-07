@@ -32,6 +32,7 @@ import com.thelightphone.sdk.ui.LightText
 import com.thelightphone.sdk.ui.LightTextVariant
 import com.thelightphone.sdk.ui.LightThemeTokens
 import com.thelightphone.sdk.ui.gridUnitsAsDp
+import com.thelightphone.sdk.ui.lightClickable
 import com.thelightphone.toolmanager.ClientLeafNode
 import com.thelightphone.toolmanager.ClientToolManifest
 import com.thelightphone.toolmanager.FileBrowserSpec
@@ -63,6 +64,11 @@ private object Take {
 @InitialScreen
 class RecorderScreen(host: SealedLightActivity) : FieldScreen(host) {
 
+    override fun willShow() {
+        super.willShow()
+        Settings.load(lightContext)
+    }
+
     override fun willHide() {
         LightFieldRecorder.stopMonitor()
     }
@@ -76,6 +82,7 @@ class RecorderScreen(host: SealedLightActivity) : FieldScreen(host) {
         val state by LightFieldRecorder.state.collectAsState()
         val level by LightFieldRecorder.level.collectAsState()
         val clipped by LightFieldRecorder.clipped.collectAsState()
+        val settings by Settings.state.collectAsState()
         val askMic = rememberPermissionRequestLauncher(MIC)
 
         LaunchedEffect(state.recording, state.error) {
@@ -128,6 +135,23 @@ class RecorderScreen(host: SealedLightActivity) : FieldScreen(host) {
                     lighten = true,
                 )
                 Meter(level, clipped, Modifier.padding(top = 2f.gridUnitsAsDp()).fillMaxWidth().height(28.dp))
+                if (!state.recording) {
+                    androidx.compose.foundation.layout.Row(
+                        Modifier.fillMaxWidth().padding(top = 1f.gridUnitsAsDp()),
+                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(2f.gridUnitsAsDp()),
+                    ) {
+                        LightText(
+                            "Mic: ${settings.source.label}",
+                            LightTextVariant.Copy,
+                            modifier = Modifier.lightClickable { Settings.nextSource(lightContext) },
+                        )
+                        LightText(
+                            "Boost: +${settings.gainDb} dB",
+                            LightTextVariant.Copy,
+                            modifier = Modifier.lightClickable { Settings.nextGain(lightContext) },
+                        )
+                    }
+                }
                 LightText(
                     if (clipped) "Too loud. Move back from the sound." else " ",
                     LightTextVariant.Detail,
@@ -195,5 +219,43 @@ private fun Meter(level: Float, clipped: Boolean, modifier: Modifier) {
                 drawRect(dim, Offset(x, size.height * 0.35f), Size(w, size.height * 0.3f))
             }
         }
+    }
+}
+
+/** Mic choice and boost, remembered between sessions. */
+object Settings {
+    data class S(val source: LightFieldRecorder.Source, val gainDb: Int)
+    private val gains = listOf(0, 6, 12, 18, 24, 30)
+    val state = kotlinx.coroutines.flow.MutableStateFlow(S(LightFieldRecorder.source, LightFieldRecorder.gainDb))
+    private var file: java.io.File? = null
+
+    fun load(ctx: com.thelightphone.sdk.SealedLightContext) {
+        if (file != null) return
+        val f = java.io.File(ctx.filesDir, "recorder-settings.txt").also { file = it }
+        runCatching {
+            val (src, g) = f.readText().trim().split(' ')
+            apply(S(LightFieldRecorder.Source.valueOf(src), g.toInt()))
+        }
+    }
+
+    fun nextSource(ctx: com.thelightphone.sdk.SealedLightContext) {
+        val all = LightFieldRecorder.Source.entries
+        set(ctx, state.value.copy(source = all[(state.value.source.ordinal + 1) % all.size]))
+    }
+
+    fun nextGain(ctx: com.thelightphone.sdk.SealedLightContext) {
+        set(ctx, state.value.copy(gainDb = gains[(gains.indexOf(state.value.gainDb) + 1).mod(gains.size)]))
+    }
+
+    private fun set(ctx: com.thelightphone.sdk.SealedLightContext, s: S) {
+        apply(s)
+        runCatching { file?.writeText("${s.source.name} ${s.gainDb}") }
+        LightFieldRecorder.restartMonitor(ctx)
+    }
+
+    private fun apply(s: S) {
+        state.value = s
+        LightFieldRecorder.source = s.source
+        LightFieldRecorder.gainDb = s.gainDb
     }
 }

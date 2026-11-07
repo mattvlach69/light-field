@@ -32,6 +32,22 @@ import kotlinx.coroutines.flow.asStateFlow
  */
 object LightFieldRecorder {
 
+    /** Which mic path to use. Phones differ a lot; try each and keep what sounds best. */
+    enum class Source(val label: String) {
+        /** Tuned for video: usually the back mic, natural gain, light processing. */
+        Room("Room"),
+        /** No processing at all. Cleanest, but can be very quiet on phones. */
+        Raw("Raw"),
+        /** The voice-memo path: auto gain and noise reduction. Loud, but pumps. */
+        Voice("Voice"),
+    }
+
+    /** Mic path for the next take and the level meter. */
+    @Volatile var source: Source = Source.Room
+
+    /** Digital boost applied before saving, in dB (0 = none). */
+    @Volatile var gainDb: Int = 12
+
     data class State(
         val recording: Boolean = false,
         val file: File? = null,
@@ -93,35 +109,62 @@ object LightFieldRecorder {
 
     // Level meter while not recording, so you can check the sound before pressing record.
 
+    @Volatile private var monitorGen = 0
     @Volatile private var monitorRunning = false
 
     @SuppressLint("MissingPermission")
     fun startMonitor(ctx: SealedLightContext) {
         if (monitorRunning || _state.value.recording) return
         monitorRunning = true
+        val gen = ++monitorGen
         val am = ctx.androidContext.getSystemService(AudioManager::class.java)
         thread(isDaemon = true, name = "FieldMonitor") {
             val rec = runCatching { openRecord(am, 48_000).first }.getOrNull()
             if (rec == null) {
-                monitorRunning = false
+                if (gen == monitorGen) monitorRunning = false
                 return@thread
             }
             val buf = ShortArray(2048)
             runCatching {
                 rec.startRecording()
-                while (monitorRunning && !_state.value.recording) {
+                while (gen == monitorGen && monitorRunning && !_state.value.recording) {
                     val n = rec.read(buf, 0, buf.size)
-                    if (n > 0) _level.value = peak(buf, n)
+                    if (n > 0) {
+                        applyGain(buf, n)
+                        _level.value = peak(buf, n)
+                    }
                 }
             }
             runCatching { rec.stop() }
             rec.release()
-            monitorRunning = false
+            if (gen == monitorGen) monitorRunning = false
         }
     }
 
     fun stopMonitor() {
+        monitorGen++
         monitorRunning = false
+    }
+
+    /** Restart the meter after changing [source] or [gainDb]. */
+    fun restartMonitor(ctx: SealedLightContext) {
+        stopMonitor()
+        _clipped.value = false
+        if (hasMicPermission(ctx)) startMonitor(ctx)
+    }
+
+    /** Boost [n] samples in place by [gainDb], clipping softly instead of wrapping. */
+    internal fun applyGain(buf: ShortArray, n: Int) {
+        val g = gainDb
+        if (g == 0) return
+        val k = Math.pow(10.0, g / 20.0).toFloat()
+        for (i in 0 until n) {
+            val x = buf[i] * k / 32_768f
+            // tanh-style soft clip above about -3 dB
+            val y = if (x > 0.7f) 0.7f + 0.3f * kotlin.math.tanh((x - 0.7f) / 0.3f)
+                else if (x < -0.7f) -0.7f + 0.3f * kotlin.math.tanh((x + 0.7f) / 0.3f) else x
+            buf[i] = (y * 32_767f).toInt().toShort()
+        }
     }
 
     internal fun peak(buf: ShortArray, n: Int): Float {
@@ -138,8 +181,12 @@ object LightFieldRecorder {
     @SuppressLint("MissingPermission")
     internal fun openRecord(am: AudioManager, rate: Int): Pair<AudioRecord, Boolean> {
         val unprocessedOk = am.getProperty(AudioManager.PROPERTY_SUPPORT_AUDIO_SOURCE_UNPROCESSED) == "true"
-        val sources = if (unprocessedOk) listOf(MediaRecorder.AudioSource.UNPROCESSED, MediaRecorder.AudioSource.MIC)
-        else listOf(MediaRecorder.AudioSource.MIC)
+        val sources = when (source) {
+            Source.Room -> listOf(MediaRecorder.AudioSource.CAMCORDER, MediaRecorder.AudioSource.MIC)
+            Source.Raw -> if (unprocessedOk) listOf(MediaRecorder.AudioSource.UNPROCESSED, MediaRecorder.AudioSource.VOICE_RECOGNITION, MediaRecorder.AudioSource.MIC)
+                else listOf(MediaRecorder.AudioSource.VOICE_RECOGNITION, MediaRecorder.AudioSource.MIC)
+            Source.Voice -> listOf(MediaRecorder.AudioSource.MIC)
+        }
         val minBytes = AudioRecord.getMinBufferSize(rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         for (src in sources) {
             val r = runCatching {
@@ -220,6 +267,7 @@ internal class FieldRecordingService : Service() {
                 while (running) {
                     val n = rec.read(buf, 0, buf.size)
                     if (n <= 0) continue
+                    LightFieldRecorder.applyGain(buf, n)
                     wav.write(buf, n)
                     LightFieldRecorder._level.value = LightFieldRecorder.peak(buf, n)
                     LightFieldRecorder._state.value = LightFieldRecorder._state.value.copy(frames = wav.frames)
