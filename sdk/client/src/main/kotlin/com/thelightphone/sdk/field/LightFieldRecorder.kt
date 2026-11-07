@@ -55,17 +55,31 @@ object LightFieldRecorder {
     internal val _clipped = MutableStateFlow(false)
     val clipped: StateFlow<Boolean> = _clipped.asStateFlow()
 
+    /** Whether the tool may use the microphone right now, checked with Android directly. */
+    fun hasMicPermission(ctx: SealedLightContext): Boolean =
+        ctx.androidContext.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+
     fun start(ctx: SealedLightContext, file: File, sampleRate: Int = 48_000) {
         if (_state.value.recording) return
+        if (!hasMicPermission(ctx)) {
+            _state.value = _state.value.copy(error = "Field needs the microphone. Allow it, then tap record again.")
+            return
+        }
         val c = ctx.androidContext.applicationContext
         _clipped.value = false
         _state.value = State(recording = true, file = file, startedAtMillis = System.currentTimeMillis(), sampleRate = sampleRate)
-        c.startForegroundService(
-            Intent(c, FieldRecordingService::class.java)
-                .setAction(FieldRecordingService.ACTION_START)
-                .putExtra(FieldRecordingService.EXTRA_PATH, file.absolutePath)
-                .putExtra(FieldRecordingService.EXTRA_RATE, sampleRate)
-        )
+        try {
+            c.startForegroundService(
+                Intent(c, FieldRecordingService::class.java)
+                    .setAction(FieldRecordingService.ACTION_START)
+                    .putExtra(FieldRecordingService.EXTRA_PATH, file.absolutePath)
+                    .putExtra(FieldRecordingService.EXTRA_RATE, sampleRate)
+            )
+        } catch (t: Throwable) {
+            Log.e("FieldRecorder", "Couldn't start recording", t)
+            _state.value = State(error = "Couldn't start recording: ${t.javaClass.simpleName}")
+        }
     }
 
     fun stop(ctx: SealedLightContext) {
@@ -166,7 +180,13 @@ internal class FieldRecordingService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> {
-                startForeground(NOTIFICATION_ID, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+                try {
+                    startForeground(NOTIFICATION_ID, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+                } catch (t: Throwable) {
+                    Log.e("FieldRecorder", "Couldn't start the recording service", t)
+                    fail("Couldn't start recording: ${t.javaClass.simpleName}")
+                    return START_NOT_STICKY
+                }
                 val path = intent.getStringExtra(EXTRA_PATH)
                 if (path != null && !running) begin(File(path), intent.getIntExtra(EXTRA_RATE, 48_000))
             }

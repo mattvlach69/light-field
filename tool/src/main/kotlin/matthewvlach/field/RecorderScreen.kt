@@ -23,12 +23,9 @@ import com.thelightphone.sdk.EntryPoint
 import com.thelightphone.sdk.InitialScreen
 import com.thelightphone.sdk.LightEntryPoint
 import com.thelightphone.sdk.SealedLightActivity
-import com.thelightphone.sdk.checkPermission
 import com.thelightphone.sdk.field.LightFieldRecorder
 import com.thelightphone.sdk.rememberPermissionRequestLauncher
-import com.thelightphone.sdk.shared.LightResult
 import com.thelightphone.sdk.shared.LightServerData
-import com.thelightphone.sdk.shared.LightServiceMethod
 import com.thelightphone.sdk.ui.LightBarButton
 import com.thelightphone.sdk.ui.LightIcons
 import com.thelightphone.sdk.ui.LightText
@@ -40,7 +37,6 @@ import com.thelightphone.toolmanager.ClientToolManifest
 import com.thelightphone.toolmanager.FileBrowserSpec
 import kotlin.math.log10
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.launch
 
 @EntryPoint
 object ToolEntryPoint : LightEntryPoint {
@@ -81,17 +77,16 @@ class RecorderScreen(host: SealedLightActivity) : FieldScreen(host) {
         val level by LightFieldRecorder.level.collectAsState()
         val clipped by LightFieldRecorder.clipped.collectAsState()
         val askMic = rememberPermissionRequestLauncher(MIC)
-        val scope = androidx.compose.runtime.rememberCoroutineScope()
 
-        LaunchedEffect(Unit) {
-            if (micGranted()) LightFieldRecorder.startMonitor(lightContext)
+        LaunchedEffect(state.recording, state.error) {
+            if (!state.recording && LightFieldRecorder.hasMicPermission(lightContext)) LightFieldRecorder.startMonitor(lightContext)
         }
 
         // When a take ends, open it to name it and add a note.
         var wasRecording by remember { androidx.compose.runtime.mutableStateOf(state.recording) }
         LaunchedEffect(state.recording) {
             val file = state.file
-            if (wasRecording && !state.recording && file != null) {
+            if (wasRecording && !state.recording && file != null && file.length() > 44) {
                 Store.saveMeta(file, file.nameWithoutExtension, "", Take.markers.toList())
                 Take.markers.clear()
                 navigateTo({ RecordingScreen(it, file.nameWithoutExtension) })
@@ -108,11 +103,12 @@ class RecorderScreen(host: SealedLightActivity) : FieldScreen(host) {
                 LightBarButton.LightIcon(LightIcons.STOP, onClick = { LightFieldRecorder.stop(lightContext) }),
             ) else listOf(
                 LightBarButton.LightIcon(LightIcons.CIRCLE, onClick = {
-                    scope.launch {
-                        if (!micGranted()) {
-                            askMic?.launch()
-                            return@launch
-                        }
+                    LightFieldRecorder.clearError()
+                    if (!LightFieldRecorder.hasMicPermission(lightContext)) {
+                        // Ask LightOS for the mic; the status line explains if nothing appears.
+                        askMic?.launch()
+                        LightFieldRecorder.start(lightContext, Store.newRecordingFile()) // sets the "needs the microphone" message
+                    } else {
                         Take.markers.clear()
                         LightFieldRecorder.start(lightContext, Store.newRecordingFile())
                     }
@@ -142,10 +138,6 @@ class RecorderScreen(host: SealedLightActivity) : FieldScreen(host) {
         }
     }
 
-    private suspend fun micGranted(): Boolean {
-        val r = checkPermission(MIC)
-        return r is LightResult.Success && r.data.permissionResult == LightServiceMethod.GetPermission.Result.Granted
-    }
 }
 
 /** One disk, spinning while recording: a groove, a label and a notch so the turn shows. */
